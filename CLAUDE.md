@@ -26,7 +26,7 @@ anything that changes output.
 - `src/kiln/`:
   - `sdf.py` shapes (distance functions), transforms, copies, noise, the combined `Field`;
   - `notation.py` `.kiln.yaml` parsing/validation -> `Model` (parts, rig, animations, variants, imports);
-  - `style.py` style profiles (`styles/*.style.toml` presets: soft_toy, low_poly, toon, clay, diorama, skin, retro_st, retro_cga, retro_mono, paint_pointillist, paint_signac); `post.py` the retro and paint post pass (Godot shader + numpy);
+  - `style.py` style profiles (`styles/*.style.toml` presets: soft_toy, low_poly, toon, clay, diorama, skin, retro_st, retro_cga, retro_mono, paint_pointillist); `post.py` the retro and paint post pass (Godot shader + numpy);
   - `project.py` `kiln.toml`, palettes (PAGAN format), loading models with their style;
   - `mesher.py` sparse sampling + dual contouring + decimation (fast-simplification) + surface projection;
   - `paint.py` part ownership with clean borders (triangle splitting), patterns (refined first), decals, normals;
@@ -238,5 +238,8 @@ anything that changes output.
   blocks and dabs at runtime. Dabs are rolled from sines of large numbers, so a GPU's 32-bit floats and the numpy
   previews roll different dabs: previews match the look, not the frame. The dab settings are uniforms and constants
   (`PAINT_DEFAULTS`), not style keys, until a game needs them per style. `kiln init` swaps the starter palette for the
-  post palette only for retro looks (a paint look mixes any colour). Dabs fixed to the world's surfaces (`paint_signac`)
-  stay an exploratory surface shader in the retro room; the preset only sets its neutral environment.
+  post palette only for retro looks (a paint look mixes any colour). A dab is whole: colour and coverage both come
+  from its centre's sample. The shader looks at a cell and its 8 neighbours, so `set_paint` clamps sizes to what that
+  covers. Dabs don't go in world space (the World pass dithers blocks; it is hidden in paint mode). Dabs fixed to the
+  world's surfaces (`paint_signac`) stay an exploratory surface shader and project style of the retro room, not a
+  preset: a built-in preset can't be taken back.

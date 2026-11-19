@@ -5,7 +5,9 @@ Paint look ([look] post = "paint"): every frame is redrawn as a jittered grid of
 (post_lines rows of them), each one pure colour from post_palette; neighbouring dabs mix optically. Shadows turn
 violet instead of going dark and everything is lifted towards pastel. Smooth shading suits it (gradients become dab
 mixtures). The dabs live in screen (or view) space: turning is steady in view space, walking slides them.
-The look kit's Retro node tunes the dabs at runtime (set_mode, set_paint).
+The look kit's Retro node tunes the dabs at runtime (set_mode, set_paint). Paint reads post_lines, pixel_aspect,
+post_palette, dither_strength (0: each dab its nearest colour) and dither_space (screen or view); dither is the
+pattern a game gets when it switches the kit to retro blocks (set_mode(0)).
 """
 
 [look]

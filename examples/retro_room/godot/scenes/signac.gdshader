@@ -14,8 +14,8 @@ global uniform float paint_contrast;  // 0: nearest colours; higher: contrasting
 global uniform float paint_accent;  // share of complementary dabs (more in the shade)
 global uniform float paint_shadow;  // shadows lean violet
 global uniform float paint_light;  // 0 flat colour, 1 the fixed sun
-global uniform float paint_lift;
-global uniform float paint_value;  // keep both pigments near the target's value (Signac: same value, different hue)  // towards white
+global uniform float paint_lift;  // towards white
+global uniform float paint_value;  // keep both pigments near the target's value (Signac: same value, different hue)
 global uniform float paint_round;  // dab corner rounding
 global uniform float paint_turn;  // random dab turn, radians
 global uniform float paint_blend;  // fade small dabs to their mix (0 never)
@@ -84,7 +84,7 @@ void fragment() {
 		plane = world_pos.xy; axis = 3.0;
 	}
 	vec2 q = plane / max(paint_dab, 0.002) + axis * 37.0;
-	float footprint = sqrt(length(dFdx(q)) * length(dFdy(q)));  // geometric mean: grazing surfaces keep their dabs longer  // dab cells per pixel
+	float footprint = sqrt(length(dFdx(q)) * length(dFdy(q)));  // dab cells per pixel (geometric mean: grazing surfaces keep their dabs longer)
 
 	// the colour to paint: the surface's own, under a fixed sun, shadows leaning violet, lifted
 	vec3 base = albedo.rgb * (use_vertex_color ? COLOR.rgb : vec3(1.0));

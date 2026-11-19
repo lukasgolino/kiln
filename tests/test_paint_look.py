@@ -37,15 +37,22 @@ def _palette(look: Look) -> set[tuple[int, ...]]:
     return {tuple(int(round(v * 255)) for v in post.rgb(c)) for c in look.post_colors}
 
 
-def test_presets() -> None:
+def test_preset() -> None:
     style, findings = load_style("paint_pointillist")
     assert style is not None and not findings
     look = style.look
     assert (look.post, look.post_palette, look.post_lines, look.dither_space) == ("paint", "pointillist", 90, "view")
-    signac, findings = load_style("paint_signac")  # the environment only: its dabs are a surface shader in the retro room
-    assert signac is not None and not findings
-    assert signac.look.post == "" and signac.look.tonemapper == "linear"
-    assert style.smooth and signac.smooth  # both extend soft_toy: gradients become dab mixtures
+    assert style.smooth  # extends soft_toy: gradients become dab mixtures
+
+
+@pytest.mark.parametrize(("look", "where", "says"), [
+    ('\n[look]\npost = "paint"\n', "look.post_palette", 'post = "paint" needs post_palette'),
+    (PAINT + 'dither_space = "world"\n', "look.dither_space", '"screen" or "view"'),
+])  # fmt: skip
+def test_bad_values_are_e006(tmp_path: Path, look: str, where: str, says: str) -> None:
+    project = _paint_project(tmp_path, look)
+    style, findings = project.style()
+    assert style is None and [(f.rule, f.where) for f in findings] == [("E006", where)] and says in findings[0].message
 
 
 def test_init_keeps_the_starter_palette(tmp_path: Path) -> None:
@@ -70,7 +77,8 @@ def test_look_scene_starts_in_paint_mode(tmp_path: Path) -> None:
     scene = look_scene(style)
     for text in ("shader_parameter/mode = 1", "shader_parameter/count = 16", "shader_parameter/dab_size = 1.4",
                  "shader_parameter/shadow_tint = Vector3(0.42, 0.36, 0.78)", "shader_parameter/ground = Vector4(0.95, 0.92, 0.84, 0.0)",
-                 "func set_mode", "func set_paint", "func get_paint", "vec3 paint(vec2 screen_uv"):  # fmt: skip
+                 "func set_mode", "func set_paint", "func get_paint", "vec4 paint(vec2 screen_uv",
+                 '$World.visible = visible and _material().get_shader_parameter(\\"space\\") == 1 and'):  # fmt: skip
         assert text in scene, text
     assert scene.count("shader_parameter/mode") == 1  # the canvas pass only: the World pass has no dabs
     world = post.world_params(style.look)
@@ -129,12 +137,24 @@ def test_painterly_grade() -> None:
     assert red[0] - red[1] > 0.3 * (1 - s["lift"])  # more colour than went in (0.3), then lifted towards white
 
 
-def test_alpha_is_the_blocks_snapped() -> None:
-    image = np.zeros((40, 40, 4))
-    image[:, 20:, 3] = 0.8
-    image[:, :20, 3] = 0.3
-    out = post.paint(image, _look(("#000000", "#ffffff")))
-    assert set(np.unique(out[..., 3])) == {0.0, 1.0} and out[:, 20:, 3].all() and not out[:, :20, 3].any()
+def test_a_dab_is_whole() -> None:
+    """Colour and coverage come from the same sample, the dab's centre: a dab over the edge of a shape is all there
+    or not at all, and no dab takes its colour from the background behind a shape."""
+    yy, xx = np.mgrid[0:200, 0:200]
+    inside = (xx - 100) ** 2 + (yy - 100) ** 2 < 70**2
+    image = np.zeros((200, 200, 4))
+    image[..., :3] = np.where(inside[..., None], [1.0, 0.88, 0.4], [0.0, 0.0, 0.6])  # a lemon disc on (transparent) blue
+    image[..., 3] = inside
+    look = _look(("#ffe066", "#4a3fa8", "#2f9e8f"), post_lines=50)
+    out = post.paint(image, look)
+    assert set(np.unique(out[..., 3])) == {0.0, 1.0}
+    shown = out[out[..., 3] == 1.0][:, :3]
+    assert len(shown) > 0.8 * inside.sum() and _colours(shown[None]) == {(255, 224, 102)}  # lemon only: no fringe
+    half = np.zeros((40, 40, 4))
+    half[:, 20:, 3] = 0.8
+    half[:, :20, 3] = 0.3
+    alpha = post.paint(half, _look(("#000000", "#ffffff")))[..., 3]
+    assert alpha[:, 26:].all() and not alpha[:, :14].any()  # snapped at 0.5; dabs straddle the line between
 
 
 def test_previews_draw_the_dabs(tmp_path: Path) -> None:
@@ -179,6 +199,14 @@ func _init() -> void:
 \tretro.set_paint("ground", Color(1.0, 0.5, 0.0, 0.5))
 \tretro.set_paint("no_such_setting", 3.0)
 \tprint("B ", retro.get_mode(), " ", retro.get_paint("dab_size"), " ", retro.get_paint("lift"), " ", retro.get_paint("shadow_tint"), " ", retro.get_paint("ground"))
+\tretro.set_paint("dab_size", 9)
+\tretro.set_paint("dab_jitter", -1)
+\tvar settings: Dictionary = retro.get_settings()
+\tprint("C ", settings["mode"], " ", settings["paint"]["dab_size"], " ", settings["paint"]["dab_jitter"], " ", settings["paint"].size())
+\tif retro.world_supported():
+\t\tretro.set_space("world")
+\tretro.set_mode(1)
+\tprint("D ", kit.get_node("Retro/World").visible)
 \tquit(0)
 """
 
@@ -199,5 +227,6 @@ def test_godot_tunes_the_dabs_at_runtime(tmp_path: Path) -> None:
     subprocess.run([godot, "--headless", "--path", str(tmp_path), "--import"], capture_output=True, timeout=300, env=env)
     run = subprocess.run([godot, "--headless", "--path", str(tmp_path), "-s", "runtime.gd", "--", "res://assets/kiln/looks/fast.tscn"],
                          capture_output=True, text=True, timeout=300, env=env)  # fmt: skip
-    lines = [line for line in run.stdout.splitlines() if line[:2] in ("A ", "B ")]
-    assert lines == ["A 1 1.4 (0.95, 0.92, 0.84, 0.0)", "B 0 2.0 0.5 (0.25, 0.5, 0.75, 1.0) (1.0, 0.5, 0.0, 0.5)"], run.stdout + run.stderr
+    lines = [line for line in run.stdout.splitlines() if line[:2] in ("A ", "B ", "C ", "D ")]
+    assert lines == ["A 1 1.4 (0.95, 0.92, 0.84, 0.0)", "B 0 2.0 0.5 (0.25, 0.5, 0.75, 1.0) (1.0, 0.5, 0.0, 0.5)",
+                     "C 0 2.0 0.0 12", "D false"], run.stdout + run.stderr  # fmt: skip

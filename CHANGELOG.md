@@ -21,13 +21,14 @@ before; their look kits change text only (the new uniforms, at their defaults, a
   `pointillist` holds 16 pastels with violets and blues for shade.
 - Look kit runtime API on the `Retro` node: `set_mode` / `get_mode` (0 retro blocks, 1 paint dabs) and `set_paint` /
   `get_paint` for the dab settings (`dab_size`, `dab_jitter`, `dab_aspect`, `dab_angle`, `dab_turn`, `dab_round`,
-  `dab_skew`, `vivid`, `lift`, `shadow_hue`, `shadow_tint`, `ground`). Any retro kit can switch to dabs and back.
+  `dab_skew`, `vivid`, `lift`, `shadow_hue`, `shadow_tint`, `ground`; numbers are clamped to the ranges the shader
+  covers), both in `get_settings()` (`mode`, `paint`). Any kit with the pass can switch to dabs and back; dabs are
+  fixed to the screen or to view directions, so a world-space kit draws them in screen space (its World pass rests
+  until mode 0) and a paint style with `dither_space = "world"` is E006.
 - Previews draw paint looks as dabs (`kiln preview`; `--no-post` shows what's under them). The dabs are rolled from
   sines of large numbers, so previews roll other dabs than a GPU: the same look, not the same frame.
-- `paint_signac` preset (exploratory): a neutral environment (linear tonemapper, no grading) for dabs painted on the
-  world's surfaces, which are a surface shader in the retro room, not part of KILN's output.
-- Retro room: keys 4 (Signac paint: pigment dabs fixed to every surface) and 5 (the pointillist screen filter); the
-  dev panel tunes both.
+- Retro room: keys 4 (Signac paint, exploratory: pigment dabs fixed to every surface, a surface shader and a project
+  style of the room, not part of KILN's output) and 5 (the pointillist screen filter); the dev panel tunes both.
 
 ### Changed
 

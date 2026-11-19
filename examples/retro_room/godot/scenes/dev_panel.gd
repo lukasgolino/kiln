@@ -8,6 +8,7 @@ signal snap_toggled(on: bool)
 
 var patterns: Array = ["bayer4"]  # the kit's own list (its Retro script's PATTERNS), read in load_kit
 var kit_style := "retro_st"  # the kit a saved preset extends
+var save_button: Button
 
 const MAX_COLOURS := 16
 const KEYS := "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -64,13 +65,13 @@ const SIGNAC_SLIDERS := [  # [global shader parameter, label, low, high, step]
 	["paint_blend", "distance blend", 0.0, 1.0, 0.01],
 ]
 const PAINT_SLIDERS := [  # [parameter, label, low, high, step]
-	["dab_size", "dab size", 0.5, 3.0, 0.01],
-	["dab_jitter", "jitter", 0.0, 1.5, 0.01],
-	["dab_aspect", "stretch", 0.0, 1.5, 0.01],
+	["dab_size", "dab size", 0.2, 2.0, 0.01],  # the ranges set_paint clamps to
+	["dab_jitter", "jitter", 0.0, 1.0, 0.01],
+	["dab_aspect", "stretch", 0.0, 1.0, 0.01],
 	["dab_angle", "brush angle", -1.6, 1.6, 0.01],
 	["dab_turn", "turn", 0.0, 1.6, 0.01],
 	["dab_round", "rounding", 0.0, 1.0, 0.01],
-	["dab_skew", "skew", 0.0, 0.6, 0.01],
+	["dab_skew", "skew", 0.0, 0.5, 0.01],
 	["vivid", "vivid", 0.0, 2.5, 0.01],
 	["lift", "pastel lift", 0.0, 0.8, 0.01],
 	["shadow_hue", "shadow hue", 0.0, 1.0, 0.01],
@@ -263,7 +264,8 @@ func _build() -> void:
 	name_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_field.text_submitted.connect(func(_t: String) -> void: save_preset(name_field.text))
 	save_row.add_child(name_field)
-	save_row.add_child(_small_button("save", func() -> void: save_preset(name_field.text)))
+	save_button = _small_button("save", func() -> void: save_preset(name_field.text))
+	save_row.add_child(save_button)
 	column.add_child(save_row)
 	save_status = Label.new()
 	save_status.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
@@ -345,6 +347,8 @@ func load_kit(kit_retro: Node) -> void:
 		pattern.add_item(p)
 	effect.set_pressed_no_signal(settings.get("enabled", true))
 	effect.disabled = retro == null
+	save_button.disabled = retro == null  # a preset is a post pass's settings: a kit without one has none to save
+	name_field.editable = retro != null
 	var has_space := retro != null and retro.has_method("set_space")
 	space.disabled = not has_space
 	space.tooltip_text = "" if has_space else "this kit's Retro pass has no set_space"
@@ -400,6 +404,7 @@ func _band_materials() -> Array[ShaderMaterial]:
 				var mesh_instance := node as MeshInstance3D
 				for i in mesh_instance.get_surface_override_material_count():
 					candidates.append(mesh_instance.get_surface_override_material(i))
+				candidates.append_array(mesh_instance.get_meta("unpainted", []))  # under the Signac paint: the materials it covers
 			for material in candidates:
 				var shader_material := material as ShaderMaterial
 				if shader_material != null and shader_material.shader != null and not found.has(shader_material) \

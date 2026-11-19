@@ -3,7 +3,8 @@
 A walkable demo of KILN's retro and paint looks (#362): nine models on pedestals in a closed room, seen through the
 Atari ST colour, CGA and Atari ST mono look kits, and painted in dabs two ways.
 
-- `art/`: the KILN project (models, palette, styles). `kiln build` writes into `godot/assets/kiln/`.
+- `art/`: the KILN project (models, palette, styles; `styles/paint_signac.style.toml` is the Signac kit's neutral
+  environment). `kiln build` writes into `godot/assets/kiln/`.
 - `godot/`: the Godot 4.7 project. `scenes/room.gd` builds the room and puts the manifest's models (sorted by name)
   on a 3x3 grid of pedestals, each scaled to 1.1 m; `scenes/player.gd` is the first-person walker; `scenes/dev_panel.gd` the F1 dev panel.
 

@@ -314,7 +314,10 @@ def load_style(name: str, project_styles: Path | None = None) -> tuple[Style | N
     if not 0 <= look.dither_strength <= 1:
         bad("[look] dither_strength is 0 (nearest colour only) to 1 (full ordered dithering)", "look.dither_strength")
     if look.post and not look.post_palette:
-        bad("[look] post = \"retro\" needs post_palette: the palette every pixel is snapped to, e.g. post_palette = \"cga\"", "look.post_palette")
+        example = "pointillist" if look.post == "paint" else "cga"
+        bad(f"[look] post = \"{look.post}\" needs post_palette: the palette every pixel is snapped to, e.g. post_palette = \"{example}\"", "look.post_palette")
+    if look.post == "paint" and look.dither_space == "world":
+        bad("[look] post = \"paint\" draws its dabs on the screen: dither_space is \"screen\" or \"view\" (steady while the camera turns)", "look.dither_space")
     if any(f.severity == "error" for f in findings):
         return None, findings
     style = Style(name, str(data.get("description", "")), bool(smooth), float(sharp), float(resolution), dict(budgets), materials, look,
