@@ -50,7 +50,8 @@ low poly and toon. Make your own from inspiration images.
 ![The same models in soft_toy, low_poly and toon](https://raw.githubusercontent.com/lukasgolino/kiln/main/docs/styles.png)
 
 The retro styles draw the screen the way 80s machines did: low resolution, a fixed palette, ordered dithering
-(`retro_st`, `retro_cga`, `retro_mono`; in Godot and in previews alike).
+(`retro_st`, `retro_cga`, `retro_mono`; in Godot and in previews alike). `paint_pointillist` redraws it as dabs of pure pastel
+colour that mix in the eye.
 
 ![Demo models in retro_st, retro_cga and retro_mono](https://raw.githubusercontent.com/lukasgolino/kiln/main/docs/retro.png)
 

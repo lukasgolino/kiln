@@ -26,7 +26,7 @@ HARD_MODES = ("auto", "always", "never")
 TONEMAPPERS = ("linear", "filmic", "aces", "agx")
 OUTLINE_SPACES = ("metres", "pixels")
 TOON_SHADOWS = ("soft", "band")
-POSTS = ("", "retro")
+POSTS = ("", "retro", "paint")
 DITHER_SPACES = ("screen", "world", "view")  # kiln.post.SPACES
 DITHERS = ("bayer4", "bayer8", "none", "halftone", "lines", "hatch", "noise")  # kiln.post.PATTERNS
 MAX_POST_COLORS = 16  # the retro pass's palette uniform
@@ -301,7 +301,7 @@ def load_style(name: str, project_styles: Path | None = None) -> tuple[Style | N
     elif look.outline_space == "pixels" and 0 < look.outline < 0.5:
         bad(f"[look] outline is pixels with outline_space = \"pixels\" ({look.outline:g} px won't show), e.g. 2", "look.outline")
     if look.post not in POSTS:
-        bad("[look] post is \"\" (none) or \"retro\" (low resolution, a fixed palette, ordered dithering)", "look.post")
+        bad("[look] post is \"\" (none), \"retro\" (low resolution, a fixed palette, ordered dithering) or \"paint\" (dabs of palette colour)", "look.post")
     if look.dither not in DITHERS:
         bad(f"[look] dither is {', '.join(DITHERS)}", "look.dither")
     if look.dither_space not in DITHER_SPACES:
@@ -314,7 +314,10 @@ def load_style(name: str, project_styles: Path | None = None) -> tuple[Style | N
     if not 0 <= look.dither_strength <= 1:
         bad("[look] dither_strength is 0 (nearest colour only) to 1 (full ordered dithering)", "look.dither_strength")
     if look.post and not look.post_palette:
-        bad("[look] post = \"retro\" needs post_palette: the palette every pixel is snapped to, e.g. post_palette = \"cga\"", "look.post_palette")
+        example = "pointillist" if look.post == "paint" else "cga"
+        bad(f"[look] post = \"{look.post}\" needs post_palette: the palette every pixel is snapped to, e.g. post_palette = \"{example}\"", "look.post_palette")
+    if look.post == "paint" and look.dither_space == "world":
+        bad("[look] post = \"paint\" draws its dabs on the screen: dither_space is \"screen\" or \"view\" (steady while the camera turns)", "look.dither_space")
     if any(f.severity == "error" for f in findings):
         return None, findings
     style = Style(name, str(data.get("description", "")), bool(smooth), float(sharp), float(resolution), dict(budgets), materials, look,

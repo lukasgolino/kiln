@@ -14,6 +14,9 @@ look at runtime through the Retro node's script (`RETRO_SCRIPT`).
 The pattern is fixed to the screen by default; `dither_space = "view"` (#372) shifts it by the camera's turn in whole
 blocks (steady while turning, any renderer), and `dither_space = "world"` (#367, Godot Forward+ only) fixes it to
 surfaces through a depth-reading pass in the 3D render (`WORLD_SHADER`). Previews always draw screen space.
+
+`post = "paint"` is the same pass in its second mode (`PAINT_GLSL`, `paint`): the frame redrawn as overlapping dabs of
+pure palette colour instead of blocks.
 """
 
 from __future__ import annotations
@@ -117,6 +120,13 @@ def rgb(hex_color: str) -> tuple[float, float, float]:
     return (int(hex_color[1:3], 16) / 255, int(hex_color[3:5], 16) / 255, int(hex_color[5:7], 16) / 255)
 
 
+# Paint mode's starting values (written into the material: the Retro script reads them back for the dev panel).
+PAINT_DEFAULTS = {"dab_size": 1.4, "dab_jitter": 0.7, "dab_aspect": 0.3, "dab_angle": 0.35, "dab_turn": 0.3, "dab_round": 0.3,
+                  "dab_skew": 0.15, "vivid": 1.35, "lift": 0.2, "shadow_hue": 0.55}
+SHADOW_TINT = (0.42, 0.36, 0.78)  # shadows turn this colour instead of going dark
+GROUND = (0.95, 0.92, 0.84, 0.0)  # the canvas between dabs (alpha: how much shows)
+
+
 def material_params(look: Look) -> list[str]:
     """The ShaderMaterial's `shader_parameter/...` lines: the style's settings as the uniforms' starting values."""
     colors = [rgb(c) for c in look.post_colors] + [(0.0, 0.0, 0.0)] * (MAX_COLORS - len(look.post_colors))
@@ -129,12 +139,19 @@ def material_params(look: Look) -> list[str]:
         f"shader_parameter/count = {len(look.post_colors)}",
         f"shader_parameter/colors = PackedVector3Array({vectors})",
         f"shader_parameter/space = {SPACES.index(look.dither_space)}",
+        f"shader_parameter/mode = {1 if look.post == 'paint' else 0}",
+        *(f"shader_parameter/{k} = {_float(v)}" for k, v in PAINT_DEFAULTS.items()),
+        f"shader_parameter/shadow_tint = Vector3({', '.join(_float(v) for v in SHADOW_TINT)})",
+        f"shader_parameter/ground = Vector4({', '.join(_float(v) for v in GROUND)})",
     ]
+
+
+WORLD_UNIFORMS = ("lines", "pixel_aspect", "strength", "pattern", "count", "colors")
 
 
 def world_params(look: Look) -> list[str]:
     """The World pass's `shader_parameter/...` lines: the canvas pass's settings (but `space`) and the look's exposure."""
-    return [*(line for line in material_params(look) if "/space " not in line), f"shader_parameter/exposure = {_float(look.exposure)}"]
+    return [*(line for line in material_params(look) if line.split(" ")[0].split("/")[1] in WORLD_UNIFORMS), f"shader_parameter/exposure = {_float(look.exposure)}"]
 
 
 PATTERN_GLSL = f"""const float BAYER4[16] = float[16]({", ".join(_float(v) for v in bayer(4).flatten())});
@@ -197,6 +214,77 @@ QUANTISE_GLSL = f"""vec3 quantise(vec3 p, float threshold) {{
 }}
 """
 
+
+# Paint mode (`[look] post = "paint"`): the frame redrawn as square-ish dabs of pure palette colour that the eye mixes
+# (divisionism), instead of retro blocks. A jittered grid of dabs, one per block cell, each a slightly irregular
+# rectangle (aspect, turn, skew, rounded corners rolled per dab), stacked in a random order; each samples the scene once
+# at its centre, goes through the pastel grade (vivid colour, hue-shifted shadows, lifted towards white) and takes one
+# of the two nearest palette colours with its own random threshold: the dabs mix to the colour between them.
+PAINT_GLSL = """uniform int mode = 0;  // 0 retro blocks, 1 paint dabs
+uniform float dab_size = 1.4;  // dab length, in block cells (over 1: dabs overlap), 0.2-2
+uniform float dab_jitter = 0.7;  // the range a dab's centre wanders over round its cell's, in cells (0-1)
+uniform float dab_aspect = 0.3;  // random stretch, 0-1: 0 square, 0.3 up to 30% longer and 15% narrower
+uniform float dab_angle = 0.35;  // the brush direction, radians
+uniform float dab_turn = 0.3;  // random turn either side of dab_angle, radians
+uniform float dab_round = 0.3;  // corner rounding: 0 sharp, 1 round
+uniform float dab_skew = 0.15;  // random skew and taper, 0-0.5: no dab is a perfect rectangle
+uniform float vivid = 1.35;  // saturation before the palette
+uniform float lift = 0.2;  // towards white: pastel
+uniform vec3 shadow_tint = vec3(0.42, 0.36, 0.78);  // shadows turn this colour instead of going dark
+uniform float shadow_hue = 0.55;  // how much
+uniform vec4 ground = vec4(0.95, 0.92, 0.84, 0.0);  // the canvas between dabs (alpha: how much shows)
+
+vec4 dab_hash(vec2 p) {
+	vec4 q = vec4(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)), dot(p, vec2(419.2, 371.9)), dot(p, vec2(87.3, 215.1)));
+	return fract(sin(q) * 43758.5453);
+}
+
+vec3 painterly(vec3 c) {
+	float l = dot(c, vec3(0.299, 0.587, 0.114));
+	c = clamp(vec3(l) + (c - vec3(l)) * vivid, 0.0, 1.0);
+	float shade = clamp(1.0 - l * 1.8, 0.0, 1.0);
+	c = mix(c, shadow_tint * (0.55 + 0.45 * l), shade * shadow_hue);
+	return mix(c, vec3(1.0), lift);
+}
+
+// How far inside dab `h` (rolled per dab) the offset `d` (cells, from the dab's centre) is: < 1 inside.
+float dab_shape(vec2 d, vec4 h, vec4 k) {
+	float a = dab_angle + (h.x - 0.5) * 2.0 * dab_turn;
+	vec2 r = vec2(cos(a) * d.x + sin(a) * d.y, -sin(a) * d.x + cos(a) * d.y);
+	r.x += (k.x - 0.5) * 2.0 * dab_skew * r.y;  // skew
+	float half_len = 0.5 * dab_size * (1.0 + dab_aspect * h.y);
+	float half_wid = 0.5 * dab_size * (1.0 - 0.5 * dab_aspect * h.y) * (1.0 + (k.y - 0.5) * 2.0 * dab_skew * r.x / max(half_len, 1e-3));  // taper
+	vec2 u = abs(r) / vec2(half_len, max(half_wid, 1e-3));
+	float n = mix(16.0, 2.5, clamp(dab_round * (0.6 + 0.8 * k.z), 0.0, 1.0));
+	return pow(pow(u.x, n) + pow(u.y, n), 1.0 / n);
+}
+
+vec4 paint(vec2 screen_uv, vec2 screen_px, vec2 block, vec2 offset) {
+	vec2 q = screen_uv * screen_px / block - offset;  // cells, fixed to view directions in view space
+	vec2 base = floor(q);  // the dabs of this cell and its 8 neighbours: all that reach here within the settings' ranges
+	float best = -1.0;
+	vec2 best_centre = base + 0.5;
+	float best_level = 0.5;
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			vec2 n = base + vec2(float(i), float(j));
+			vec4 h = dab_hash(n);
+			vec4 k = dab_hash(n + vec2(57.0, 113.0));
+			vec2 centre = n + 0.5 + (h.zw - 0.5) * dab_jitter;
+			if (dab_shape(q - centre, h, k) < 1.0 && k.w > best) {
+				best = k.w;
+				best_centre = centre;
+				best_level = clamp(fract(h.z * 7.13 + h.w * 3.71), 0.001, 0.999);
+			}
+		}
+	}
+	vec2 uv = clamp((best_centre + offset) * block / screen_px, vec2(0.0), vec2(1.0));
+	vec4 sampled = texture(screen, uv);  // a dab is whole: its colour and its coverage are its centre's
+	vec3 c = quantise(painterly(sampled.rgb), best_level);
+	return vec4(best < 0.0 ? mix(c, ground.rgb, ground.a) : c, step(0.5, sampled.a));
+}
+"""
+
 SHADER = f"""shader_type canvas_item;
 render_mode unshaded;
 
@@ -225,6 +313,7 @@ vec2 view_cell(vec2 cell, float shown_lines) {{
 
 {PATTERN_GLSL}
 {QUANTISE_GLSL}
+{PAINT_GLSL}
 void fragment() {{
 \tvec2 screen_px = 1.0 / SCREEN_PIXEL_SIZE;
 \tfloat bh = screen_px.y / min(lines, screen_px.y);  // never under one screen pixel
@@ -232,8 +321,13 @@ void fragment() {{
 \tvec2 cell = floor(SCREEN_UV * screen_px / block);
 \tvec2 uv = clamp((cell + 0.5) * block / screen_px, vec2(0.0), vec2(1.0));
 \tvec4 sampled = texture(screen, uv);
-\tfloat level = space == 1 ? 1.0 : threshold(space == 2 ? view_cell(cell, screen_px.y / bh) : cell);
-\tCOLOR = vec4(quantise(sampled.rgb, level), step(0.5, sampled.a));  // a game's screen is opaque; engine previews keep their transparent background
+\tif (mode == 1) {{
+\t\tvec2 offset = space == 2 ? cell - view_cell(cell, screen_px.y / bh) : vec2(0.0);
+\t\tCOLOR = paint(SCREEN_UV, screen_px, block, offset);
+\t}} else {{
+\t\tfloat level = space == 1 ? 1.0 : threshold(space == 2 ? view_cell(cell, screen_px.y / bh) : cell);
+\t\tCOLOR = vec4(quantise(sampled.rgb, level), step(0.5, sampled.a));  // a game's screen is opaque; engine previews keep their transparent background
+\t}}
 }}
 """
 
@@ -330,7 +424,7 @@ void fragment() {{
 # setting uniforms by name.
 RETRO_SCRIPT = f"""extends CanvasLayer
 ## KILN's retro pass. Change the look at runtime: set_enabled, set_lines, set_pixel_aspect, set_strength,
-## set_pattern, set_palette, set_space; get_settings returns them all.
+## set_pattern, set_palette, set_space, set_mode (retro blocks or paint dabs), set_paint; get_settings returns them all.
 
 const PATTERNS := [{", ".join(f'"{p}"' for p in PATTERNS)}]
 const SPACES := [{", ".join(f'"{p}"' for p in SPACES)}]
@@ -388,8 +482,8 @@ func _feed_view() -> void:
 	_material().set_shader_parameter("view_tan", half)
 
 
-func _show_world() -> void:
-	$World.visible = visible and _material().get_shader_parameter("space") == 1
+func _show_world() -> void:  # the World pass dithers blocks: paint dabs draw in screen space meanwhile
+	$World.visible = visible and _material().get_shader_parameter("space") == 1 and _material().get_shader_parameter("mode") == 0
 
 
 func set_enabled(on: bool) -> void:
@@ -453,6 +547,50 @@ func get_palette() -> PackedColorArray:
 	return palette
 
 
+const PAINT := {{  # setting -> [lowest, highest]: sizes the shader's search of the neighbouring cells covers
+	"dab_size": [0.2, 2.0], "dab_jitter": [0.0, 1.0], "dab_aspect": [0.0, 1.0], "dab_angle": [-PI, PI], "dab_turn": [0.0, PI],
+	"dab_round": [0.0, 1.0], "dab_skew": [0.0, 0.5], "vivid": [0.0, 3.0], "lift": [0.0, 1.0], "shadow_hue": [0.0, 1.0],
+}}
+
+
+## 0 retro blocks, 1 paint dabs. Dabs are fixed to the screen or to view directions: a world-space kit draws them in
+## screen space and takes its World pass up again in mode 0.
+func set_mode(value: int) -> void:
+	_material().set_shader_parameter("mode", clampi(value, 0, 1))
+	_show_world()
+
+
+func get_mode() -> int:
+	return _material().get_shader_parameter("mode")
+
+
+## A paint-mode setting by name (PAINT, clamped to its range), or "shadow_tint" / "ground" (Color; ground's alpha: how
+## much canvas shows).
+func set_paint(parameter: String, value: Variant) -> void:
+	if parameter == "shadow_tint":
+		_material().set_shader_parameter(parameter, Vector3(value.r, value.g, value.b))
+	elif parameter == "ground":
+		_material().set_shader_parameter(parameter, Vector4(value.r, value.g, value.b, value.a))
+	elif parameter in PAINT:
+		_material().set_shader_parameter(parameter, clampf(float(value), PAINT[parameter][0], PAINT[parameter][1]))
+
+
+func get_paint(parameter: String) -> Variant:
+	var value: Variant = _material().get_shader_parameter(parameter)
+	if parameter == "shadow_tint":
+		return Color(value.x, value.y, value.z)
+	if parameter == "ground":
+		return Color(value.x, value.y, value.z, value.w)
+	return value
+
+
+func get_paint_settings() -> Dictionary:
+	var settings := {{"shadow_tint": get_paint("shadow_tint"), "ground": get_paint("ground")}}
+	for parameter in PAINT:
+		settings[parameter] = get_paint(parameter)
+	return settings
+
+
 func get_settings() -> Dictionary:
 	var material := _material()
 	return {{
@@ -463,6 +601,8 @@ func get_settings() -> Dictionary:
 		"pattern": PATTERNS[material.get_shader_parameter("pattern")],
 		"space": SPACES[material.get_shader_parameter("space")],
 		"palette": get_palette(),
+		"mode": get_mode(),
+		"paint": get_paint_settings(),
 	}}
 """
 
@@ -473,9 +613,26 @@ def shader(look: Look) -> str:
     return SHADER
 
 
+def _snap(p: np.ndarray, pal: np.ndarray, thr: np.ndarray, strength: float) -> np.ndarray:
+    """`quantise` in numpy: per pixel of `p` (..., 3) the nearer two of `pal`'s colours, the second where `thr` is below
+    the colour's projection onto first -> second (x strength)."""
+    d = ((p[..., None, :] - pal) ** 2).sum(axis=-1)
+    order = np.argsort(d, axis=-1, kind="stable")
+    i1 = order[..., 0]
+    i2 = order[..., 1] if len(pal) > 1 else i1
+    c1, c2 = pal[i1], pal[i2]
+    span = c2 - c1
+    t = np.clip(((p - c1) * span).sum(-1) / np.maximum((span * span).sum(-1), 1e-9), 0, 1) if len(pal) > 1 else np.zeros(p.shape[:-1])
+    out: np.ndarray = np.where((thr < t * strength)[..., None], c2, c1)
+    return out
+
+
 def retro(image: np.ndarray, look: Look) -> np.ndarray:
     """The same pass on an sRGB float image (H, W, 3 or 4, 0..1), as the shader draws it on a screen that size.
-    Alpha is snapped to 0 or 1 at 0.5 (previews composite on their tile background)."""
+    Alpha is snapped to 0 or 1 at 0.5 (previews composite on their tile background). A paint look (`post = "paint"`)
+    draws its dabs (`paint`)."""
+    if look.post == "paint":
+        return paint(image, look)
     h, w = image.shape[:2]
     bw, bh = block_size(h, look)
     ys, xs = np.arange(h) + 0.5, np.arange(w) + 0.5  # pixel centres, as SCREEN_UV * screen size
@@ -483,18 +640,77 @@ def retro(image: np.ndarray, look: Look) -> np.ndarray:
     sy = np.clip(((cy + 0.5) * bh).astype(int), 0, h - 1)  # the block centre's pixel (nearest filter)
     sx = np.clip(((cx + 0.5) * bw).astype(int), 0, w - 1)
     sampled = image[sy[:, None], sx[None, :]]
-    p = sampled[..., :3]
     pal = np.array([rgb(c) for c in look.post_colors])
-    d = ((p[..., None, :] - pal) ** 2).sum(axis=-1)
-    order = np.argsort(d, axis=-1, kind="stable")
-    i1 = order[..., 0]
-    i2 = order[..., 1] if len(pal) > 1 else i1
-    c1, c2 = pal[i1], pal[i2]
-    span = c2 - c1
-    t = np.clip(((p - c1) * span).sum(-1) / np.maximum((span * span).sum(-1), 1e-9), 0, 1) if len(pal) > 1 else np.zeros(p.shape[:2])
     cell_thr = threshold(look.dither, cx[None, :], cy[:, None])
     out: np.ndarray = np.array(sampled, dtype=np.float64)
     if out.shape[-1] == 4:  # alpha snapped as the shader does: no half-covered, off-palette edge pixels
         out[..., 3] = (out[..., 3] >= 0.5).astype(np.float64)
-    out[..., :3] = np.where((cell_thr < t * look.dither_strength)[..., None], c2, c1)
+    out[..., :3] = _snap(sampled[..., :3], pal, cell_thr, look.dither_strength)
+    return out
+
+
+def _dab_hash(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """`dab_hash`: four rolls in 0..1 per cell (..., 4). The sines are of large numbers, so a GPU's 32-bit floats roll
+    other dabs than these: the look is the same, not the frame."""
+    q = np.stack([x * 127.1 + y * 311.7, x * 269.5 + y * 183.3, x * 419.2 + y * 371.9, x * 87.3 + y * 215.1], axis=-1)
+    rolled: np.ndarray = np.mod(np.sin(q) * 43758.5453, 1.0)
+    return rolled
+
+
+def painterly(c: np.ndarray, vivid: float, lift: float, shadow_hue: float) -> np.ndarray:
+    """Paint mode's grade (the shader's `painterly`): more colour, shadows towards violet, lifted towards white."""
+    lum = (c * np.array([0.299, 0.587, 0.114])).sum(-1, keepdims=True)
+    c = np.clip(lum + (c - lum) * vivid, 0.0, 1.0)
+    shade = np.clip(1.0 - lum * 1.8, 0.0, 1.0)
+    tint = np.array(SHADOW_TINT) * (0.55 + 0.45 * lum)
+    c = c + (tint - c) * shade * shadow_hue
+    graded: np.ndarray = c + (1.0 - c) * lift
+    return graded
+
+
+def paint(image: np.ndarray, look: Look) -> np.ndarray:
+    """Paint mode on an sRGB float image (H, W, 3 or 4, 0..1), the shader's `paint` in screen space: one dab per block
+    cell, jittered and slightly irregular, the topmost dab over a pixel giving its colour and its coverage: the scene at
+    the dab's centre, graded (`painterly`) and snapped to one of its two nearest palette colours by the dab's own
+    threshold; alpha snapped to 0 or 1 at 0.5."""
+    s = PAINT_DEFAULTS
+    h, w = image.shape[:2]
+    bw, bh = block_size(h, look)
+    qx, qy = np.meshgrid((np.arange(w) + 0.5) / bw, (np.arange(h) + 0.5) / bh)
+    bx, by = np.floor(qx).astype(int), np.floor(qy).astype(int)
+    # every cell's rolls once (cells -1 .. the last + 1: a pixel looks at its cell's 8 neighbours)
+    gx, gy = np.meshgrid(np.arange(-1.0, bx.max() + 2), np.arange(-1.0, by.max() + 2))
+    rolls, more = _dab_hash(gx, gy), _dab_hash(gx + 57.0, gy + 113.0)
+    best = np.full((h, w), -1.0)
+    centre_x, centre_y = bx + 0.5, by + 0.5
+    level = np.full((h, w), 0.5)
+    for j in (-1, 0, 1):
+        for i in (-1, 0, 1):
+            nx, ny = bx + i, by + j
+            r, k = rolls[ny + 1, nx + 1], more[ny + 1, nx + 1]
+            cx = nx + 0.5 + (r[..., 2] - 0.5) * s["dab_jitter"]
+            cy = ny + 0.5 + (r[..., 3] - 0.5) * s["dab_jitter"]
+            dx, dy = qx - cx, qy - cy
+            a = s["dab_angle"] + (r[..., 0] - 0.5) * 2.0 * s["dab_turn"]
+            rx, ry = np.cos(a) * dx + np.sin(a) * dy, -np.sin(a) * dx + np.cos(a) * dy
+            rx = rx + (k[..., 0] - 0.5) * 2.0 * s["dab_skew"] * ry  # skew
+            half_len = 0.5 * s["dab_size"] * (1.0 + s["dab_aspect"] * r[..., 1])
+            taper = 1.0 + (k[..., 1] - 0.5) * 2.0 * s["dab_skew"] * rx / np.maximum(half_len, 1e-3)
+            half_wid = 0.5 * s["dab_size"] * (1.0 - 0.5 * s["dab_aspect"] * r[..., 1]) * taper
+            ux, uy = np.abs(rx) / half_len, np.abs(ry) / np.maximum(half_wid, 1e-3)
+            n = 16.0 + (2.5 - 16.0) * np.clip(s["dab_round"] * (0.6 + 0.8 * k[..., 2]), 0.0, 1.0)
+            on_top = ((ux**n + uy**n) ** (1.0 / n) < 1.0) & (k[..., 3] > best)
+            best = np.where(on_top, k[..., 3], best)
+            centre_x, centre_y = np.where(on_top, cx, centre_x), np.where(on_top, cy, centre_y)
+            level = np.where(on_top, np.clip(np.mod(r[..., 2] * 7.13 + r[..., 3] * 3.71, 1.0), 0.001, 0.999), level)
+    sx = np.clip((centre_x * bw).astype(int), 0, w - 1)  # the dab centre's pixel (nearest filter)
+    sy = np.clip((centre_y * bh).astype(int), 0, h - 1)
+    sampled = image[sy, sx]
+    pal = np.array([rgb(c) for c in look.post_colors])
+    colour = _snap(painterly(sampled[..., :3], s["vivid"], s["lift"], s["shadow_hue"]), pal, level, look.dither_strength)
+    canvas = colour + (np.array(GROUND[:3]) - colour) * GROUND[3]
+    out: np.ndarray = np.array(sampled, dtype=np.float64)
+    if out.shape[-1] == 4:  # a dab is whole: its coverage is its centre's, snapped
+        out[..., 3] = (out[..., 3] >= 0.5).astype(np.float64)
+    out[..., :3] = np.where((best < 0.0)[..., None], canvas, colour)
     return out

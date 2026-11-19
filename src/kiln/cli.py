@@ -116,7 +116,7 @@ def _init_palette(style_name: str) -> str:
     from kiln.style import load_style
 
     style, _ = load_style(style_name)
-    if style is None or not style.look.post:
+    if style is None or style.look.post != "retro":  # a paint look mixes its dabs from any colours: the starter stays
         return _template("main.pal.yaml")
     text = (library_dir() / f"{style.look.post_palette}.pal.yaml").read_text(encoding="utf-8")
     return re.sub(r"^name: .*$", "name: main", text, count=1, flags=re.MULTILINE)

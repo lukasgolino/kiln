@@ -8,6 +8,7 @@ signal snap_toggled(on: bool)
 
 var patterns: Array = ["bayer4"]  # the kit's own list (its Retro script's PATTERNS), read in load_kit
 var kit_style := "retro_st"  # the kit a saved preset extends
+var save_button: Button
 
 const MAX_COLOURS := 16
 const KEYS := "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -46,6 +47,35 @@ var name_field: LineEdit
 var save_status: Label
 
 var _panel: PanelContainer
+var paint_mode: CheckButton
+var paint_box: VBoxContainer
+var paint_sliders := {}  # parameter -> HSlider
+var shadow_picker: ColorPickerButton
+var ground_picker: ColorPickerButton
+const SIGNAC_SLIDERS := [  # [global shader parameter, label, low, high, step]
+	["paint_dab", "dab size (m)", 0.01, 0.2, 0.005],
+	["paint_contrast", "contrast", 0.0, 2.0, 0.01],
+	["paint_value", "same value", 0.0, 3.0, 0.01],
+	["paint_accent", "accents", 0.0, 0.6, 0.01],
+	["paint_shadow", "violet shade", 0.0, 1.0, 0.01],
+	["paint_light", "sun", 0.0, 1.0, 0.01],
+	["paint_lift", "lift", 0.0, 0.6, 0.01],
+	["paint_round", "rounding", 0.0, 1.0, 0.01],
+	["paint_turn", "dab turn", 0.0, 1.6, 0.01],
+	["paint_blend", "distance blend", 0.0, 1.0, 0.01],
+]
+const PAINT_SLIDERS := [  # [parameter, label, low, high, step]
+	["dab_size", "dab size", 0.2, 2.0, 0.01],  # the ranges set_paint clamps to
+	["dab_jitter", "jitter", 0.0, 1.0, 0.01],
+	["dab_aspect", "stretch", 0.0, 1.0, 0.01],
+	["dab_angle", "brush angle", -1.6, 1.6, 0.01],
+	["dab_turn", "turn", 0.0, 1.6, 0.01],
+	["dab_round", "rounding", 0.0, 1.0, 0.01],
+	["dab_skew", "skew", 0.0, 0.5, 0.01],
+	["vivid", "vivid", 0.0, 2.5, 0.01],
+	["lift", "pastel lift", 0.0, 0.8, 0.01],
+	["shadow_hue", "shadow hue", 0.0, 1.0, 0.01],
+]
 
 
 func _ready() -> void:
@@ -143,6 +173,47 @@ func _build() -> void:
 		set_bands(int(v)))
 
 	column.add_child(HSeparator.new())
+	column.add_child(_heading("Signac paint (key 4)"))
+	for entry in SIGNAC_SLIDERS:
+		var global_name: String = entry[0]
+		var slider := _slider(column, entry[1], entry[2], entry[3], entry[4], "%.2f", func(v: float) -> void:
+			RenderingServer.global_shader_parameter_set(global_name, v))
+		var current: Variant = ProjectSettings.get_setting("shader_globals/" + global_name, {}).get("value")
+		_set_slider(slider, float(current) if current != null else entry[2])
+
+	column.add_child(HSeparator.new())
+	column.add_child(_heading("Paint filter (key 5)"))
+	paint_mode = CheckButton.new()
+	paint_mode.text = "paint dabs (off: retro blocks)"
+	paint_mode.toggled.connect(func(on: bool) -> void:
+		if retro != null and retro.has_method("set_mode"):
+			retro.set_mode(1 if on else 0)
+		paint_box.visible = on)
+	column.add_child(_unfocused(paint_mode))
+	paint_box = VBoxContainer.new()
+	paint_box.add_theme_constant_override("separation", 6)
+	column.add_child(paint_box)
+	for entry in PAINT_SLIDERS:
+		var parameter: String = entry[0]
+		paint_sliders[parameter] = _slider(paint_box, entry[1], entry[2], entry[3], entry[4], "%.2f", func(v: float) -> void:
+			if retro != null and retro.has_method("set_paint"):
+				retro.set_paint(parameter, v))
+	shadow_picker = ColorPickerButton.new()
+	shadow_picker.custom_minimum_size = Vector2(60, 24)
+	shadow_picker.edit_alpha = false
+	shadow_picker.color_changed.connect(func(c: Color) -> void:
+		if retro != null and retro.has_method("set_paint"):
+			retro.set_paint("shadow_tint", c))
+	paint_box.add_child(_row("shadow tint", _unfocused(shadow_picker)))
+	ground_picker = ColorPickerButton.new()
+	ground_picker.custom_minimum_size = Vector2(60, 24)
+	ground_picker.tooltip_text = "alpha: how much canvas shows between dabs"
+	ground_picker.color_changed.connect(func(c: Color) -> void:
+		if retro != null and retro.has_method("set_paint"):
+			retro.set_paint("ground", c))
+	paint_box.add_child(_row("canvas", _unfocused(ground_picker)))
+
+	column.add_child(HSeparator.new())
 	column.add_child(_heading("Palette"))
 	preset = OptionButton.new()
 	preset.add_item("custom")
@@ -193,7 +264,8 @@ func _build() -> void:
 	name_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_field.text_submitted.connect(func(_t: String) -> void: save_preset(name_field.text))
 	save_row.add_child(name_field)
-	save_row.add_child(_small_button("save", func() -> void: save_preset(name_field.text)))
+	save_button = _small_button("save", func() -> void: save_preset(name_field.text))
+	save_row.add_child(save_button)
 	column.add_child(save_row)
 	save_status = Label.new()
 	save_status.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
@@ -275,6 +347,8 @@ func load_kit(kit_retro: Node) -> void:
 		pattern.add_item(p)
 	effect.set_pressed_no_signal(settings.get("enabled", true))
 	effect.disabled = retro == null
+	save_button.disabled = retro == null  # a preset is a post pass's settings: a kit without one has none to save
+	name_field.editable = retro != null
 	var has_space := retro != null and retro.has_method("set_space")
 	space.disabled = not has_space
 	space.tooltip_text = "" if has_space else "this kit's Retro pass has no set_space"
@@ -301,6 +375,15 @@ func load_kit(kit_retro: Node) -> void:
 	_set_slider(strength, float(settings.get("strength", 1.0)))
 	palette = settings.get("palette", PackedColorArray([Color.BLACK, Color.WHITE]))
 	_show_palette()
+	var has_paint := retro != null and retro.has_method("set_paint")
+	paint_mode.disabled = not has_paint
+	paint_mode.set_pressed_no_signal(has_paint and retro.get_mode() == 1)
+	paint_box.visible = paint_mode.button_pressed
+	if has_paint:
+		for parameter in paint_sliders:
+			_set_slider(paint_sliders[parameter], float(retro.get_paint(parameter)))
+		shadow_picker.color = retro.get_paint("shadow_tint")
+		ground_picker.color = retro.get_paint("ground")
 
 
 ## The models whose toon materials the light bands slider drives; reads the bands they have now.
@@ -321,6 +404,7 @@ func _band_materials() -> Array[ShaderMaterial]:
 				var mesh_instance := node as MeshInstance3D
 				for i in mesh_instance.get_surface_override_material_count():
 					candidates.append(mesh_instance.get_surface_override_material(i))
+				candidates.append_array(mesh_instance.get_meta("unpainted", []))  # under the Signac paint: the materials it covers
 			for material in candidates:
 				var shader_material := material as ShaderMaterial
 				if shader_material != null and shader_material.shader != null and not found.has(shader_material) \
@@ -439,8 +523,20 @@ func style_text(preset_name: String) -> String:
 		"dither_strength = %s" % _toml_float(float(settings.get("strength", strength.value))),
 		"dither_space = \"%s\"" % str(settings.get("space", "screen")),
 		"toon_bands = %d" % bands,
+		"# paint: %s" % _paint_text(),
 		"",
 	])
+
+
+func _paint_text() -> String:  # the paint settings aren't style keys yet: a note to copy from
+	if retro == null or not retro.has_method("get_paint"):
+		return "n/a"
+	var parts := ["mode=%d" % retro.get_mode()]
+	for parameter in paint_sliders:
+		parts.append("%s=%s" % [parameter, _toml_float(float(retro.get_paint(parameter)))])
+	parts.append("shadow_tint=#%s" % retro.get_paint("shadow_tint").to_html(false))
+	parts.append("ground=#%s" % retro.get_paint("ground").to_html(true))
+	return " ".join(parts)
 
 
 ## The palette file, PAGAN format.

@@ -1,6 +1,7 @@
 # Headless smoke test of the retro room: run it for 30 frames, then check every pedestal holds a model (as many as
-# the manifest has), the player stands on the floor, and every look key (1 / 2 / 3, Tab) swaps in a look kit with
-# a WorldEnvironment and the Retro pass, freeing the previous one. Each model's size and place on its pedestal, and a
+# the manifest has), the player stands on the floor, and every look key (1-5, Tab) swaps in a look kit with
+# a WorldEnvironment and the Retro pass (blocks, or dabs for the pointillist filter; the Signac kit paints every
+# surface instead and other kits take the paint off again), freeing the previous one. Each model's size and place on its pedestal, and a
 # walk: W held for a second moves the player forward and keeps it inside the walls. The dev panel (F1): pattern,
 # lines, palette count, randomise, effect off / on and light bands reach the Retro pass and the models, a kit switch
 # loads the new kit's settings, and Save preset writes the style and palette files.
@@ -41,8 +42,36 @@ func _check_kit(what: String, style: String) -> void:
 		_fail("%s: look kit %s, expected %s" % [what, kit.get_meta("kiln_style", "?"), style])
 	if kit.find_child("WorldEnvironment", false, false) == null:
 		_fail("%s: look kit %s has no WorldEnvironment" % [what, style])
-	if kit.find_child("Retro", false, false) == null:
+	var retro := kit.find_child("Retro", false, false)
+	if style == "paint_signac":  # its dabs are on the surfaces, not a screen pass
+		if retro != null:
+			_fail("%s: look kit %s has a Retro pass" % [what, style])
+	elif retro == null:
 		_fail("%s: look kit %s has no Retro pass" % [what, style])
+	elif retro.get_mode() != (1 if style == "paint_pointillist" else 0):
+		_fail("%s: look kit %s starts in mode %d" % [what, style, retro.get_mode()])
+	if _painted() != (_meshes() if style == "paint_signac" else 0):
+		_fail("%s: %d of %d surfaces' meshes wear the Signac paint under %s" % [what, _painted(), _meshes(), style])
+
+
+func _world_meshes() -> Array:
+	var found := []
+	for node in _scene.find_children("*", "MeshInstance3D", true, false):
+		if node.mesh != null and not _scene.look_kit.is_ancestor_of(node):
+			found.append(node)
+	return found
+
+
+func _meshes() -> int:
+	return _world_meshes().size()
+
+
+func _painted() -> int:
+	var count := 0
+	for node in _world_meshes():
+		if node.has_meta("unpainted") and node.get_surface_override_material(0) is ShaderMaterial:
+			count += 1
+	return count
 
 
 func _process(_delta: float) -> bool:
@@ -141,7 +170,7 @@ func _check_room() -> void:
 	elif not player.is_on_floor() or absf(player.position.y) > 0.05:
 		_fail("the player isn't standing on the floor (y = %.3f)" % player.position.y)
 	var kits: Dictionary = manifest.get("looks", {})
-	var styles := ["retro_st", "retro_cga", "retro_mono"]
+	var styles := ["retro_st", "retro_cga", "retro_mono", "paint_signac", "paint_pointillist"]
 	for i in styles.size():
 		if not kits.has(styles[i]):
 			_fail("the manifest has no %s look kit" % styles[i])
@@ -149,7 +178,7 @@ func _check_room() -> void:
 		_key(KEY_1 + i)
 		_check_kit("key %d" % (i + 1), styles[i])
 	_key(KEY_1)
-	for i in _scene.looks.size():  # Tab: st -> cga -> mono -> st
+	for i in _scene.looks.size():  # Tab: st -> cga -> mono -> signac -> pointillist -> st
 		_key(KEY_TAB)
 		_check_kit("Tab %d" % (i + 1), _scene.looks[(i + 1) % _scene.looks.size()][0])
 

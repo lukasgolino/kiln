@@ -84,7 +84,7 @@ fog_color = "#c8d8e8"
 rim_light = 0.0                # an added fresnel rim on every surface (Godot: a next pass; previews too): 0.5-1 reads on bright skies
 rim_light_color = "#ffffff"
 rim_light_power = 3.0          # higher: thinner rim
-post = ""                      # "retro": a low-res, fixed-palette, dithered screen (see Retro looks); "" = none
+post = ""                      # "retro": a low-res, fixed-palette, dithered screen (see Retro looks); "paint": dabs; "" = none
 post_lines = 200               # retro: vertical resolution (200: CGA / Atari ST; 400: ST mono)
 pixel_aspect = 0.8333          # retro: pixel width / height (320x200 on a 4:3 screen: 5/6; 640x400: 1.0)
 post_palette = "cga"           # retro: the palette every pixel is snapped to (palettes/ or KILN's library), at most 16 colours
@@ -199,3 +199,17 @@ light falls into a few clean dither patterns. `kiln init --style retro_cga` writ
   SubViewports too (a minimap comes out dithered as well). Previews (`kiln preview`, also
   `--engine`) draw screen space.
 
+## Paint look
+
+`paint_pointillist` (`[look] post = "paint"`, extends `soft_toy`) redraws every frame as overlapping dabs of pure
+colour from `post_palette` (the library's 16-colour `pointillist`: pastels, violets for shade, no black or grey) that
+the eye mixes. It is the retro pass's second mode: one dab per cell (`post_lines` rows, `pixel_aspect`), jittered,
+turned and slightly irregular; each takes the scene's colour and coverage at its centre, graded (more colour, shadows
+towards violet, lifted towards white), and becomes one of its two nearest palette colours by its own random
+threshold (`dither_strength` 0: always the nearest). `dither` is not read (it is the pattern after `set_mode(0)`);
+`dither_space` is `screen` or `view` (steady while the camera turns; walking slides the dabs), not `world`. Smooth
+shading suits it and models keep any palette. Runtime, on the `Retro` node: `set_mode(1)` (0: retro blocks; a
+world-space kit draws dabs in screen space) and `set_paint(name, value)`, clamped: `dab_size` (0.2-2 cells),
+`dab_jitter`, `dab_aspect`, `dab_angle`, `dab_turn`, `dab_round`, `dab_skew`, `vivid`, `lift`, `shadow_hue`, and
+the Colors `shadow_tint`, `ground`; not style keys yet. Previews draw the dabs too (other dabs than a GPU rolls: the
+same look, not the same frame).

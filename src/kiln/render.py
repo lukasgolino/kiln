@@ -96,8 +96,8 @@ def render(
     opaque: bool = False,
     post: bool | None = None,
 ) -> Image.Image:
-    """One view (see `_render`), through the style's retro pass ([look] post = "retro", #359) as the look kit draws it
-    on a screen this size: the tile is the whole screen, `post_lines` tall. `post`: None = the module's POST."""
+    """One view (see `_render`), through the style's post pass ([look] post = "retro", #359, or "paint") as the look kit
+    draws it on a screen this size: the tile is the whole screen, `post_lines` tall. `post`: None = the module's POST."""
     image = _render(built, view, size, track, frame, swap, fit, background, hide, fade, colors, fill, opaque)
     look = built.style.look
     if not (look.post and look.post_colors and (POST if post is None else post)):

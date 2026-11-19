@@ -1,9 +1,10 @@
 # Retro room
 
-A walkable demo of KILN's retro looks (#362): nine models on pedestals in a closed room, seen through the Atari ST
-colour, CGA and Atari ST mono look kits.
+A walkable demo of KILN's retro and paint looks (#362): nine models on pedestals in a closed room, seen through the
+Atari ST colour, CGA and Atari ST mono look kits, and painted in dabs two ways.
 
-- `art/`: the KILN project (models, palette, styles). `kiln build` writes into `godot/assets/kiln/`.
+- `art/`: the KILN project (models, palette, styles; `styles/paint_signac.style.toml` is the Signac kit's neutral
+  environment). `kiln build` writes into `godot/assets/kiln/`.
 - `godot/`: the Godot 4.7 project. `scenes/room.gd` builds the room and puts the manifest's models (sorted by name)
   on a 3x3 grid of pedestals, each scaled to 1.1 m; `scenes/player.gd` is the first-person walker; `scenes/dev_panel.gd` the F1 dev panel.
 
@@ -15,6 +16,8 @@ colour, CGA and Atari ST mono look kits.
 | Shift | run |
 | mouse | look (Esc frees the mouse, a click captures it again) |
 | 1 / 2 / 3 | Atari ST colour / CGA / Atari ST mono |
+| 4 | Signac paint: dabs of pure pigment fixed to every surface (`scenes/signac.gdshader`, exploratory) |
+| 5 | Pointillist filter: the screen redrawn in dabs (`paint_pointillist`, the retro pass in paint mode) |
 | Tab | next look |
 | F1 | dev panel: tune the look live (the mouse is free while it's open) |
 
@@ -33,7 +36,14 @@ F1 opens a column on the left, above the retro pass, that drives the look kit's 
   `<name>.pal.yaml` (PAGAN format) into `user://presets/` (the panel shows the folder) and copies the style to the
   clipboard. To use one, copy the style into `art/styles/` and the palette into `art/palettes/`.
 
-Switching kit (1 / 2 / 3, Tab) starts from that kit's own settings; light bands stay as set.
+- Signac paint (key 4): dab size in metres, contrast of the pigment pairs, same value, accents (complementary
+  dabs), violet shade, sun, lift, rounding, dab turn, distance blend (small dabs fade to their mix). These are global
+  shader parameters of the room's own surface shader;
+- Paint filter (key 5): paint dabs on / off (off: retro blocks; any kit with the pass can switch), dab size, jitter,
+  stretch, brush angle, turn, rounding, skew, vivid, pastel lift, shadow hue, shadow tint and canvas colour (alpha:
+  how much canvas shows between dabs): the `Retro` node's `set_mode` / `set_paint`.
+
+Switching kit (1-5, Tab) starts from that kit's own settings; light bands stay as set.
 
 ## Build and run
 
