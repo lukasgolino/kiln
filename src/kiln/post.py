@@ -14,6 +14,9 @@ look at runtime through the Retro node's script (`RETRO_SCRIPT`).
 The pattern is fixed to the screen by default; `dither_space = "view"` (#372) shifts it by the camera's turn in whole
 blocks (steady while turning, any renderer), and `dither_space = "world"` (#367, Godot Forward+ only) fixes it to
 surfaces through a depth-reading pass in the 3D render (`WORLD_SHADER`). Previews always draw screen space.
+
+`post = "paint"` is the same pass in its second mode (`PAINT_GLSL`, `paint`): the frame redrawn as overlapping dabs of
+pure palette colour instead of blocks.
 """
 
 from __future__ import annotations
@@ -120,6 +123,8 @@ def rgb(hex_color: str) -> tuple[float, float, float]:
 # Paint mode's starting values (written into the material: the Retro script reads them back for the dev panel).
 PAINT_DEFAULTS = {"dab_size": 1.4, "dab_jitter": 0.7, "dab_aspect": 0.3, "dab_angle": 0.35, "dab_turn": 0.3, "dab_round": 0.3,
                   "dab_skew": 0.15, "vivid": 1.35, "lift": 0.2, "shadow_hue": 0.55}
+SHADOW_TINT = (0.42, 0.36, 0.78)  # shadows turn this colour instead of going dark
+GROUND = (0.95, 0.92, 0.84, 0.0)  # the canvas between dabs (alpha: how much shows)
 
 
 def material_params(look: Look) -> list[str]:
@@ -136,8 +141,8 @@ def material_params(look: Look) -> list[str]:
         f"shader_parameter/space = {SPACES.index(look.dither_space)}",
         f"shader_parameter/mode = {1 if look.post == 'paint' else 0}",
         *(f"shader_parameter/{k} = {_float(v)}" for k, v in PAINT_DEFAULTS.items()),
-        "shader_parameter/shadow_tint = Vector3(0.42, 0.36, 0.78)",
-        "shader_parameter/ground = Vector4(0.95, 0.92, 0.84, 0.0)",
+        f"shader_parameter/shadow_tint = Vector3({', '.join(_float(v) for v in SHADOW_TINT)})",
+        f"shader_parameter/ground = Vector4({', '.join(_float(v) for v in GROUND)})",
     ]
 
 
@@ -592,9 +597,26 @@ def shader(look: Look) -> str:
     return SHADER
 
 
+def _snap(p: np.ndarray, pal: np.ndarray, thr: np.ndarray, strength: float) -> np.ndarray:
+    """`quantise` in numpy: per pixel of `p` (..., 3) the nearer two of `pal`'s colours, the second where `thr` is below
+    the colour's projection onto first -> second (x strength)."""
+    d = ((p[..., None, :] - pal) ** 2).sum(axis=-1)
+    order = np.argsort(d, axis=-1, kind="stable")
+    i1 = order[..., 0]
+    i2 = order[..., 1] if len(pal) > 1 else i1
+    c1, c2 = pal[i1], pal[i2]
+    span = c2 - c1
+    t = np.clip(((p - c1) * span).sum(-1) / np.maximum((span * span).sum(-1), 1e-9), 0, 1) if len(pal) > 1 else np.zeros(p.shape[:-1])
+    out: np.ndarray = np.where((thr < t * strength)[..., None], c2, c1)
+    return out
+
+
 def retro(image: np.ndarray, look: Look) -> np.ndarray:
     """The same pass on an sRGB float image (H, W, 3 or 4, 0..1), as the shader draws it on a screen that size.
-    Alpha is snapped to 0 or 1 at 0.5 (previews composite on their tile background)."""
+    Alpha is snapped to 0 or 1 at 0.5 (previews composite on their tile background). A paint look (`post = "paint"`)
+    draws its dabs (`paint`)."""
+    if look.post == "paint":
+        return paint(image, look)
     h, w = image.shape[:2]
     bw, bh = block_size(h, look)
     ys, xs = np.arange(h) + 0.5, np.arange(w) + 0.5  # pixel centres, as SCREEN_UV * screen size
@@ -602,18 +624,75 @@ def retro(image: np.ndarray, look: Look) -> np.ndarray:
     sy = np.clip(((cy + 0.5) * bh).astype(int), 0, h - 1)  # the block centre's pixel (nearest filter)
     sx = np.clip(((cx + 0.5) * bw).astype(int), 0, w - 1)
     sampled = image[sy[:, None], sx[None, :]]
-    p = sampled[..., :3]
     pal = np.array([rgb(c) for c in look.post_colors])
-    d = ((p[..., None, :] - pal) ** 2).sum(axis=-1)
-    order = np.argsort(d, axis=-1, kind="stable")
-    i1 = order[..., 0]
-    i2 = order[..., 1] if len(pal) > 1 else i1
-    c1, c2 = pal[i1], pal[i2]
-    span = c2 - c1
-    t = np.clip(((p - c1) * span).sum(-1) / np.maximum((span * span).sum(-1), 1e-9), 0, 1) if len(pal) > 1 else np.zeros(p.shape[:2])
     cell_thr = threshold(look.dither, cx[None, :], cy[:, None])
     out: np.ndarray = np.array(sampled, dtype=np.float64)
     if out.shape[-1] == 4:  # alpha snapped as the shader does: no half-covered, off-palette edge pixels
         out[..., 3] = (out[..., 3] >= 0.5).astype(np.float64)
-    out[..., :3] = np.where((cell_thr < t * look.dither_strength)[..., None], c2, c1)
+    out[..., :3] = _snap(sampled[..., :3], pal, cell_thr, look.dither_strength)
+    return out
+
+
+def _dab_hash(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """`dab_hash`: four rolls in 0..1 per cell (..., 4). The sines are of large numbers, so a GPU's 32-bit floats roll
+    other dabs than these: the look is the same, not the frame."""
+    q = np.stack([x * 127.1 + y * 311.7, x * 269.5 + y * 183.3, x * 419.2 + y * 371.9, x * 87.3 + y * 215.1], axis=-1)
+    rolled: np.ndarray = np.mod(np.sin(q) * 43758.5453, 1.0)
+    return rolled
+
+
+def painterly(c: np.ndarray, vivid: float, lift: float, shadow_hue: float) -> np.ndarray:
+    """Paint mode's grade (the shader's `painterly`): more colour, shadows towards violet, lifted towards white."""
+    lum = (c * np.array([0.299, 0.587, 0.114])).sum(-1, keepdims=True)
+    c = np.clip(lum + (c - lum) * vivid, 0.0, 1.0)
+    shade = np.clip(1.0 - lum * 1.8, 0.0, 1.0)
+    tint = np.array(SHADOW_TINT) * (0.55 + 0.45 * lum)
+    c = c + (tint - c) * shade * shadow_hue
+    graded: np.ndarray = c + (1.0 - c) * lift
+    return graded
+
+
+def paint(image: np.ndarray, look: Look) -> np.ndarray:
+    """Paint mode on an sRGB float image (H, W, 3 or 4, 0..1), the shader's `paint` in screen space: one dab per block
+    cell, jittered and slightly irregular, the topmost dab over a pixel giving its colour: the scene at the dab's centre,
+    graded (`painterly`) and snapped to one of its two nearest palette colours by the dab's own threshold."""
+    s = PAINT_DEFAULTS
+    h, w = image.shape[:2]
+    bw, bh = block_size(h, look)
+    qx, qy = np.meshgrid((np.arange(w) + 0.5) / bw, (np.arange(h) + 0.5) / bh)
+    bx, by = np.floor(qx), np.floor(qy)
+    best = np.full((h, w), -1.0)
+    centre_x, centre_y = bx + 0.5, by + 0.5
+    level = np.full((h, w), 0.5)
+    for j in (-1, 0, 1):
+        for i in (-1, 0, 1):
+            nx, ny = bx + i, by + j
+            r, k = _dab_hash(nx, ny), _dab_hash(nx + 57.0, ny + 113.0)
+            cx = nx + 0.5 + (r[..., 2] - 0.5) * s["dab_jitter"]
+            cy = ny + 0.5 + (r[..., 3] - 0.5) * s["dab_jitter"]
+            dx, dy = qx - cx, qy - cy
+            a = s["dab_angle"] + (r[..., 0] - 0.5) * 2.0 * s["dab_turn"]
+            rx, ry = np.cos(a) * dx + np.sin(a) * dy, -np.sin(a) * dx + np.cos(a) * dy
+            rx = rx + (k[..., 0] - 0.5) * 2.0 * s["dab_skew"] * ry  # skew
+            half_len = 0.5 * s["dab_size"] * (1.0 + s["dab_aspect"] * r[..., 1])
+            taper = 1.0 + (k[..., 1] - 0.5) * 2.0 * s["dab_skew"] * rx / np.maximum(half_len, 1e-3)
+            half_wid = 0.5 * s["dab_size"] * (1.0 - 0.5 * s["dab_aspect"] * r[..., 1]) * taper
+            ux, uy = np.abs(rx) / half_len, np.abs(ry) / np.maximum(half_wid, 1e-3)
+            n = 16.0 + (2.5 - 16.0) * np.clip(s["dab_round"] * (0.6 + 0.8 * k[..., 2]), 0.0, 1.0)
+            on_top = ((ux**n + uy**n) ** (1.0 / n) < 1.0) & (k[..., 3] > best)
+            best = np.where(on_top, k[..., 3], best)
+            centre_x, centre_y = np.where(on_top, cx, centre_x), np.where(on_top, cy, centre_y)
+            level = np.where(on_top, np.clip(np.mod(r[..., 2] * 7.13 + r[..., 3] * 3.71, 1.0), 0.001, 0.999), level)
+    sx = np.clip((centre_x * bw).astype(int), 0, w - 1)  # the dab centre's pixel (nearest filter)
+    sy = np.clip((centre_y * bh).astype(int), 0, h - 1)
+    sampled = image[sy, sx]
+    pal = np.array([rgb(c) for c in look.post_colors])
+    colour = _snap(painterly(sampled[..., :3], s["vivid"], s["lift"], s["shadow_hue"]), pal, level, look.dither_strength)
+    canvas = colour + (np.array(GROUND[:3]) - colour) * GROUND[3]
+    out: np.ndarray = np.array(image, dtype=np.float64)
+    if out.shape[-1] == 4:  # coverage is the block centre's, snapped, as in the retro mode
+        ay = np.clip(((by + 0.5) * bh).astype(int), 0, h - 1)
+        ax = np.clip(((bx + 0.5) * bw).astype(int), 0, w - 1)
+        out[..., 3] = (image[ay, ax, 3] >= 0.5).astype(np.float64)
+    out[..., :3] = np.where((best < 0.0)[..., None], canvas, colour)
     return out

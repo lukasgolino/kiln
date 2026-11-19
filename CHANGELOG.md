@@ -6,6 +6,36 @@ before 1.0).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-19
+
+Paint look: the retro pass gains a second mode that redraws the frame as dabs of pure colour. Existing looks draw as
+before; their look kits change text only (the new uniforms, at their defaults, and the mode switch).
+
+### Added
+
+- `[look] post = "paint"` and the `paint_pointillist` preset: every frame is redrawn as a jittered grid of
+  overlapping, slightly irregular dabs (`post_lines` rows of them), each one pure colour from `post_palette`;
+  neighbouring dabs mix in the eye. Each dab takes the scene's colour at its centre through a pastel grade (more
+  colour, shadows towards violet, lifted towards white) and becomes one of its two nearest palette colours by its own
+  random threshold. `dither_space = "view"` keeps the dabs steady while the camera turns. The library palette
+  `pointillist` holds 16 pastels with violets and blues for shade.
+- Look kit runtime API on the `Retro` node: `set_mode` / `get_mode` (0 retro blocks, 1 paint dabs) and `set_paint` /
+  `get_paint` for the dab settings (`dab_size`, `dab_jitter`, `dab_aspect`, `dab_angle`, `dab_turn`, `dab_round`,
+  `dab_skew`, `vivid`, `lift`, `shadow_hue`, `shadow_tint`, `ground`). Any retro kit can switch to dabs and back.
+- Previews draw paint looks as dabs (`kiln preview`; `--no-post` shows what's under them). The dabs are rolled from
+  sines of large numbers, so previews roll other dabs than a GPU: the same look, not the same frame.
+- `paint_signac` preset (exploratory): a neutral environment (linear tonemapper, no grading) for dabs painted on the
+  world's surfaces, which are a surface shader in the retro room, not part of KILN's output.
+- Retro room: keys 4 (Signac paint: pigment dabs fixed to every surface) and 5 (the pointillist screen filter); the
+  dev panel tunes both.
+
+### Changed
+
+- Look kits with a post pass carry the paint uniforms and the `mode` switch: `looks/<style>.tscn` of retro styles
+  changes text, not what it draws.
+- `kiln init --style <a paint look>` keeps the starter palette (a retro style still gets its hardware palette as
+  `main`): dabs mix any colour.
+
 ## [0.34.0] - 2026-11-13
 
 ### Added
@@ -1250,7 +1280,8 @@ First release.
   MCP server (`kiln[mcp]`), Python API for generator scripts, Claude skill.
 - Demo project (toy airline + toy siege) and a Godot 4.7 showcase.
 
-[Unreleased]: https://github.com/lukasgolino/kiln/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/lukasgolino/kiln/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/lukasgolino/kiln/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/lukasgolino/kiln/compare/v0.33.1...v0.34.0
 [0.33.1]: https://github.com/lukasgolino/kiln/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/lukasgolino/kiln/compare/v0.32.0...v0.33.0

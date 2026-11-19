@@ -26,7 +26,7 @@ anything that changes output.
 - `src/kiln/`:
   - `sdf.py` shapes (distance functions), transforms, copies, noise, the combined `Field`;
   - `notation.py` `.kiln.yaml` parsing/validation -> `Model` (parts, rig, animations, variants, imports);
-  - `style.py` style profiles (`styles/*.style.toml` presets: soft_toy, low_poly, toon, clay, diorama, skin, retro_st, retro_cga, retro_mono); `post.py` the retro post pass (Godot shader + numpy);
+  - `style.py` style profiles (`styles/*.style.toml` presets: soft_toy, low_poly, toon, clay, diorama, skin, retro_st, retro_cga, retro_mono, paint_pointillist, paint_signac); `post.py` the retro and paint post pass (Godot shader + numpy);
   - `project.py` `kiln.toml`, palettes (PAGAN format), loading models with their style;
   - `mesher.py` sparse sampling + dual contouring + decimation (fast-simplification) + surface projection;
   - `paint.py` part ownership with clean borders (triangle splitting), patterns (refined first), decals, normals;
@@ -233,3 +233,10 @@ anything that changes output.
   accepted over object-space for v1. The palette is resolved when the project loads the style (`post_colors`, not a
   TOML key), at most 16 (a uniform-free const array). PAGAN 0.23's `hardware:` is vendored (its E017 is E004 here;
   W015 stays PAGAN's). kiln.toml `looks` builds look kits no model uses (a game switching looks).
+- 2026-11-19: 0.35.0 (paint look): `[look] post = "paint"` is the retro pass's second mode (one shader, a `mode`
+  uniform), not a second pass: same kit node, palette, block grid and view-space shift, so a game switches between
+  blocks and dabs at runtime. Dabs are rolled from sines of large numbers, so a GPU's 32-bit floats and the numpy
+  previews roll different dabs: previews match the look, not the frame. The dab settings are uniforms and constants
+  (`PAINT_DEFAULTS`), not style keys, until a game needs them per style. `kiln init` swaps the starter palette for the
+  post palette only for retro looks (a paint look mixes any colour). Dabs fixed to the world's surfaces (`paint_signac`)
+  stay an exploratory surface shader in the retro room; the preset only sets its neutral environment.
